@@ -51,15 +51,18 @@ extern xQueueHandle uartCmdQ;
 
 
 char openDoor( const int sem_ind, const char sensor_en ) {
-    const unsigned int open_state = open + (sensor_en * SENSORO_IS);
-    //previous line means that the door is considered open here if it is really fully open or if the sensorO is enabled AND triggered.
+    char sensor_block;  //indicates if door blocked by sensor.
     
-    if (sensor_en == 0)
+    if (sensor_en == 0) {
         xSemaphoreTake(sensorEnSemphr, 0);  //disable door sensors.
-    else
+        sensor_block = 0;
+    }
+    else {
         xSemaphoreGive(sensorEnSemphr);     //enable door sensors.
+        sensor_block = SENSORO_IS;          //keep an eye on sensor signal.
+    }
     
-    if ( (sMsg.door != open_state) && (sMsg.door != opening) ) {
+    if ( (sMsg.door != open) && (sMsg.door != opening) && !sensor_block) {
         
         if (xSemaphoreTake(mutexD, pdMS_TO_TICKS(DOOR_DELAY)) == pdPASS) {  //wait for mutex.
             if (uxSemaphoreGetCount(semphrArray[sem_ind])) {    //to check whether the semaphore (permission) has been taken meanwhile.
@@ -74,19 +77,22 @@ char openDoor( const int sem_ind, const char sensor_en ) {
         return 2;   //mutex or semphr not granted.
     }
 
-    return 0;   //already fully open or opening.
+    return 0;   //already fully open or opening or blocked.
 }
 
 char closeDoor( const int sem_ind, const char sensor_en ) {
-    const unsigned int closed_state = closed + (sensor_en * SENSORC_IS);
-    //previous line means that the door is considered closed here if it is really fully closed or if the sensorC is enabled AND triggered.
-        
-    if (sensor_en == 0)
-        xSemaphoreTake(sensorEnSemphr, 0);  //disable door sensors.
-    else
-        xSemaphoreGive(sensorEnSemphr);     //enable door sensors.
+    char sensor_block;  //indicates if door blocked by sensor.
     
-    if ( (sMsg.door != closed_state) && (sMsg.door != closing) ) {
+    if (sensor_en == 0) {
+        xSemaphoreTake(sensorEnSemphr, 0);  //disable door sensors.
+        sensor_block = 0;
+    }
+    else {
+        xSemaphoreGive(sensorEnSemphr);     //enable door sensors.
+        sensor_block = SENSORC_IS;          //keep an eye on sensor signal.
+    }
+    
+    if ( (sMsg.door != closed) && (sMsg.door != closing) && !sensor_block) {
         
         if (xSemaphoreTake(mutexD, pdMS_TO_TICKS(DOOR_DELAY)) == pdPASS) {  //wait for mutex.
             if (uxSemaphoreGetCount(semphrArray[sem_ind])) {    //to check whether the semaphore (permission) has been taken meanwhile.
@@ -101,7 +107,22 @@ char closeDoor( const int sem_ind, const char sensor_en ) {
         return 2;   //mutex or semphr not granted.
     }
     
-    return 0;   //already fully closed or closing.
+    return 0;   //already fully closed or closing or blocked.
+}
+
+void blockLowerEvents(const int sem_ind, BaseType_t *sem_taken) {
+    for (int i=0; i<sem_ind; i++) {
+        if (sem_taken[i] != pdTRUE)
+            sem_taken[i] = xSemaphoreTake(semphrArray[i], 0);
+    }
+}
+
+void unblockLowerEvents(const int sem_ind, BaseType_t *sem_taken) {
+    for (int i=0; i<sem_ind; i++) {
+        if (sem_taken[i] == pdTRUE)
+            if (xSemaphoreGive(semphrArray[i]))
+                sem_taken[i] = pdFALSE;
+    }
 }
 
 void presenceTask(int sem_ind) {
@@ -130,7 +151,7 @@ void securityAlarmTask(int sem_ind) {
     TickType_t xLastWake = xTaskGetTickCount();
     char giveback = 0;
     
-    BaseType_t sem_taken[sem_ind];
+    BaseType_t sem_taken[sem_ind];      //array of states of taken semaphores.
     for (int i=0; i<sem_ind; i++) {
         sem_taken[i] = pdFALSE;
     }
@@ -139,14 +160,13 @@ void securityAlarmTask(int sem_ind) {
         if (SEC_SIG) {
             LED_SEC = 1;
             sMsg.security = 1;
-            
-            for (int i=0; i<sem_ind; i++) {
-                if (sem_taken[i] != pdTRUE)
-                    sem_taken[i] = xSemaphoreTake(semphrArray[i], 0);
-            }
-            giveback = 1;   //mark that semaphores are to be given back later.
-            
+                        
             if (uxSemaphoreGetCount(semphrArray[sem_ind])) {  //to avoid taking mutex while not allowed.
+                if (!giveback) {     //to avoid unnecessary for-loops.
+                    blockLowerEvents(sem_ind, sem_taken);
+                    giveback = 1;   //mark that semaphores are to be given back later.
+                }
+                
                 closeDoor(sem_ind, SENSORS_FOR_SECURITY);
             }
             
@@ -155,14 +175,9 @@ void securityAlarmTask(int sem_ind) {
             LED_SEC = 0;
             sMsg.security = 0;
             
-            for (int i=0; i<sem_ind; i++) {
-                if (sem_taken[i] == pdTRUE)
-                    if (xSemaphoreGive(semphrArray[i]))
-                        sem_taken[i] = pdFALSE;
-            }
-            
+            unblockLowerEvents(sem_ind, sem_taken);
             giveback = 0;
-            
+
         }
         
         vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(SECURITY_DELAY)); //absolute delay.
@@ -175,7 +190,7 @@ void fireAlarmTask(int sem_ind) {
     TickType_t xLastWake = xTaskGetTickCount();
     char giveback = 0;
     
-    BaseType_t sem_taken[sem_ind];
+    BaseType_t sem_taken[sem_ind];      //array of states of taken semaphores.
     for (int i=0; i<sem_ind; i++) {
         sem_taken[i] = pdFALSE;
     }
@@ -185,13 +200,12 @@ void fireAlarmTask(int sem_ind) {
             LED_FIRE = 1;
             sMsg.fire = 1;
             
-            for (int i=0; i<sem_ind; i++) {
-                if (sem_taken[i] != pdTRUE)
-                    sem_taken[i] = xSemaphoreTake(semphrArray[i], 0);
-            }
-            giveback = 1;   //marks that semaphores are to be given back later.
-            
             if (uxSemaphoreGetCount(semphrArray[sem_ind])) {  //to avoid taking mutex while not allowed.
+                if (!giveback) {     //to avoid unnecessary for-loops.
+                    blockLowerEvents(sem_ind, sem_taken);
+                    giveback = 1;   //mark that semaphores are to be given back later.
+                }
+                
                 openDoor(sem_ind, SENSORS_FOR_FIRE);
             }
             
@@ -200,17 +214,60 @@ void fireAlarmTask(int sem_ind) {
             LED_FIRE = 0;
             sMsg.fire = 0;
             
-            for (int i=0; i<sem_ind; i++) {
-                if (sem_taken[i] == pdTRUE)
-                    if (xSemaphoreGive(semphrArray[i]))
-                        sem_taken[i] = pdFALSE;
-            }
-            
+            unblockLowerEvents(sem_ind, sem_taken);
             giveback = 0;
             
         }
 
         vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(FIRE_DELAY)); //absolute delay.
+    }
+    
+    vTaskDelete(NULL);
+}
+
+void uartRXTask(int sem_ind) {
+    unsigned char cmd;  //uart command from ISR.
+    char giveback = 0;
+    
+    BaseType_t sem_taken[sem_ind];      //array of states of taken semaphores.
+    for (int i=0; i<sem_ind; i++) {
+        sem_taken[i] = pdFALSE;
+    }
+    
+    while ( xQueueReceive(uartCmdQ, &cmd, portMAX_DELAY) ) {    //is ready each time a cmd is in queue.
+        switch(cmd) {
+            case 207:               //for simulation purposes. It should be in fact 'o'.    
+                
+                if (uxSemaphoreGetCount(semphrArray[sem_ind])) {  //to avoid taking mutex while not allowed.
+                    if (!giveback) {     //to avoid unnecessary for-loops.
+                        blockLowerEvents(sem_ind, sem_taken);
+                        giveback = 1;   //mark that semaphores are to be given back later.
+                    }
+                    
+                    openDoor(sem_ind, 0);
+                }
+                break;
+                
+            case 195:               //for simulation purposes. It should be in fact 'c'.
+                
+                if (uxSemaphoreGetCount(semphrArray[sem_ind])) {  //to avoid taking mutex while not allowed.
+                    if (!giveback) {     //to avoid unnecessary for-loops.
+                        blockLowerEvents(sem_ind, sem_taken);
+                        giveback = 1;   //mark that semaphores are to be given back later.
+                    }
+                    
+                    closeDoor(sem_ind, 0);
+                }
+                break;
+                
+            case 198:               //for simulation purposes. It should be in fact 'f'.
+                
+                if (giveback) {     //to avoid unnecessary for-loops.
+                    unblockLowerEvents(sem_ind, sem_taken);
+                    giveback = 0;
+                }
+                break;
+        }
     }
     
     vTaskDelete(NULL);
@@ -223,6 +280,8 @@ void actionDoor() {
     while( (receivedSemphr = xQueueSelectFromSet(doorCmdSet, portMAX_DELAY)) ) {    //waits indefinitly, better than looping in vain with while(1).  
         
         xSemaphoreTake(receivedSemphr, 0);  //only taken after being selected from set. To avoid desynchronisation of Give/Select/Take mechanism of the relevent semaphore.
+        
+        PORTDbits.RD7 = 1;  //Buzzer ON.
         
         if (receivedSemphr == openSemphr) {
             
@@ -247,63 +306,13 @@ void actionDoor() {
             sMsg.door = closed + sensor_en; //mark the door as closed or closedSens.
         }
         //DOOR_DELAY is a delay for mechanical constraints. Relative delay.
+        
+        PORTDbits.RD7 = 0;  //Buzzer OFF.
     }
     
     vTaskDelete(NULL);
 }
 
-void uartRXTask(int sem_ind) {
-    unsigned char cmd;  //uart command from ISR.
-    char giveback = 0;
-    
-    BaseType_t sem_taken[sem_ind];
-    for (int i=0; i<sem_ind; i++) {
-        sem_taken[i] = pdFALSE;
-    }
-    
-    while ( xQueueReceive(uartCmdQ, &cmd, portMAX_DELAY) ) {    //is ready each time a cmd is in queue.
-        switch(cmd) {
-            case 207:               //for simulation purposes. It should be in fact 'o'.
-                for (int i=0; i<sem_ind; i++) {
-                    if (sem_taken[i] != pdTRUE)
-                        sem_taken[i] = xSemaphoreTake(semphrArray[i], 0);
-                }
-                giveback = 1;
-                
-                if (uxSemaphoreGetCount(semphrArray[sem_ind])) {  //to avoid taking mutex while not allowed.
-                    xSemaphoreTake(sensorEnSemphr, 0);  //disable door sensors.
-                    openDoor(sem_ind, 0);
-                }
-                break;
-                
-            case 195:               //for simulation purposes. It should be in fact 'c'.
-                for (int i=0; i<sem_ind; i++) {
-                    if (sem_taken[i] != pdTRUE)
-                        sem_taken[i] = xSemaphoreTake(semphrArray[i], 0);
-                }
-                giveback = 1;
-                
-                if (uxSemaphoreGetCount(semphrArray[sem_ind])) {  //to avoid taking mutex while not allowed.
-                    xSemaphoreTake(sensorEnSemphr, 0);  //disable door sensors.
-                    closeDoor(sem_ind, 0);
-                }
-                break;
-                
-            case 198:               //for simulation purposes. It should be in fact 'f'.
-                if (giveback) {     //to avoid unnecessary for-loops.
-                    for (int i=0; i<sem_ind; i++) {
-                        if (sem_taken[i] == pdTRUE)
-                            if (xSemaphoreGive(semphrArray[i]))
-                                sem_taken[i] = pdFALSE;
-                    }
-                    giveback = 0;
-                }
-                break;
-        }
-    }
-    
-    vTaskDelete(NULL);
-}
 
 /*___INTERRUPTS___*/
 void __attribute__((__interrupt__, auto_psv)) _U1RXInterrupt( void )

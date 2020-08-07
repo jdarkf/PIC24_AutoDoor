@@ -1,11 +1,13 @@
 # PIC24_AutoDoor project #
 ## What is it? #
-PIC24_AutoDoor is a miniproject consisting of a **realtime** software system that commands a door based on some inputs. The application is using the **FreeRTOS 10** framework and implemented on a *Proteus v8.5* **PIC24**_FJ128GA010_ simulation model.
+PIC24_AutoDoor is a miniproject consisting of a **realtime** software system that commands a door based on some inputs. The application is using the **FreeRTOS 10** framework and implemented on a *Labcenter Electronics Proteus v8.5* **PIC24**_FJ128GA010_ simulation model.
 
 > Note: Thanks to the portability that FreeRTOS offers, it is possible to implement this application on another supported CPU architecture with few modifications to make (port configs, oscillator config, interrupts,...).
 
 ## How is the system designed? #
-![DesignPROTEUS.svg](ProteusProject/DesignPROTEUS.svg)
+![DesignPROTEUS.svg](ProteusProject/DesignPROTEUS.svg)  
+To get a clearer idea about how the system works, you can play [this video](ProteusProject/Media1.webm).  
+**Please note that the timing issues _(LED fast or slow, weird Buzzing)_ occur especially when the mouse cursor moves. This shows that the issues are due to simulation rather than the application itself.**
 
 ### Inputs #
 The system has 4 command inputs, 2 sensor inputs and a reset signal.  
@@ -24,13 +26,15 @@ The sensor inputs are:
 The edges of the doorway are logically also considered obstacles. That is useful in case of a dysfunction of the door driver.
 
 ### Outputs #
-The system has 4 LED outputs and a door command output bus.  
+The system has 4 LED outputs, a buzzer output and a door command output bus.  
 The LED outputs are:
 
 + **Presence LED:** is ON when the presence signal is high, OFF otherwise. It is connected to the MCU and not directly to the signal in order to get what the application is considering.
 + **Security LED:** is ON when the security alarm signal is high, OFF otherwise. It is connected to the MCU and not directly to the signal in order to get what the application is considering.
 + **Fire LED:**  is ON when the fire alarm signal is high, OFF otherwise. It is connected to the MCU and not directly to the signal in order to get what the application is considering.
 + **Stack Overflow LED:** turns ON if a stack overflow occurs. Exclusive for developer use.
+
+The buzzer is turned ON when the door is opening or closing, otherwise the buzzer is OFF.  
 
 When it comes to the door command, and for more visibility _(impact of sensors, of preemption,...)_, it is not considered as a single pin controlling a relay of an electrical motor. The challenge is made a little bit harder by using a 4-pin bus. Each pin controls a NPN transistor through which it commands a LED that represents a step on the doorway.  
 If the four LEDs are ON, it means that the door is fully closed.  

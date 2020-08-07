@@ -1,4 +1,6 @@
 *.workspace
+*.pdsbak
+*.kdenlive
 build/
 debug/
 private/
